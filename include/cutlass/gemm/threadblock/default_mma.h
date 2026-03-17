@@ -187,74 +187,10 @@ struct DefaultMma<ElementA, LayoutA, kAlignmentA, ElementB, LayoutB,
 
 ////////////////////////////////////////////////////////////////////////////////
 
-/// Specialization for row-major output (OperatorClass TensorOp)
-template <
-    /// Element type for A matrix operand
-    typename ElementA,
-    /// Layout type for A matrix operand
-    typename LayoutA,
-    /// Access granularity of A matrix in units of elements
-    int kAlignmentA,
-    /// Element type for B matrix operand
-    typename ElementB,
-    /// Layout type for B matrix operand
-    typename LayoutB,
-    /// Access granularity of B matrix in units of elements
-    int kAlignmentB,
-    /// Element type for internal accumulation
-    typename ElementAccumulator,
-    /// Tag indicating architecture to tune for
-    typename ArchTag,
-    /// Threadblock-level tile size (concept: GemmShape)
-    typename ThreadblockShape,
-    /// Warp-level tile size (concept: GemmShape)
-    typename WarpShape,
-    /// Instruction-level tile size (concept: GemmShape)
-    typename InstructionShape,
-    /// Operation performed by GEMM
-    typename Operator,
-    /// Use zfill or predicate for out-of-bound cp.async
-    SharedMemoryClearOption SharedMemoryClear,
-    /// Gather operand A by using an index array
-    bool GatherA,
-    /// Gather operand B by using an index array
-    bool GatherB,
-    /// Permute operand A
-    typename PermuteALayout,
-    /// Permute operand B
-    typename PermuteBLayout
-    >
-struct DefaultMma<ElementA, LayoutA, kAlignmentA, ElementB, LayoutB,
-                  kAlignmentB, ElementAccumulator, layout::RowMajor,
-                  arch::OpClassTensorOp, ArchTag, ThreadblockShape, WarpShape,
-                  InstructionShape, 2, Operator, false, SharedMemoryClear,
-                  GatherA, GatherB, PermuteALayout, PermuteBLayout> {
-  // Define the MmaCore components
-  using MmaCore = typename cutlass::gemm::threadblock::DefaultMmaCore<
-      ThreadblockShape, WarpShape, InstructionShape, ElementA, LayoutA,
-      ElementB, LayoutB, ElementAccumulator, layout::RowMajor,
-      arch::OpClassTensorOp, 2, Operator>;
-
-  // Define iterators over tiles from the A operand
-  using IteratorA =
-      cutlass::transform::threadblock::PredicatedTileIterator<
-          cutlass::MatrixShape<MmaCore::Shape::kM, MmaCore::Shape::kK>,
-          ElementA, LayoutA, 1, typename MmaCore::IteratorThreadMapA, kAlignmentA,
-          GatherA, PermuteALayout>;
-
-  // Define iterators over tiles from the B operand
-  using IteratorB =
-      cutlass::transform::threadblock::PredicatedTileIterator<
-          cutlass::MatrixShape<MmaCore::Shape::kK, MmaCore::Shape::kN>,
-          ElementB, LayoutB, 0, typename MmaCore::IteratorThreadMapB, kAlignmentB,
-          GatherB, PermuteBLayout>;
-
-  // Define the threadblock-scoped pipelined matrix multiply
-  using ThreadblockMma = cutlass::gemm::threadblock::MmaPipelined<
-      typename MmaCore::Shape, IteratorA, typename MmaCore::SmemIteratorA,
-      IteratorB, typename MmaCore::SmemIteratorB, ElementAccumulator,
-      layout::RowMajor, typename MmaCore::MmaPolicy>;
-};
+// [ncblas03] REMOVED: TensorOp Stages=2 specialization that selected
+// MmaPipelined with LDG+STS (register staging). Stages=2 now falls through
+// to the generic TensorOp specialization which uses MmaMultistage with
+// cp.async. Requires SM80+.
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Specialization for row-major output (OperatorClass TensorOp)
@@ -531,11 +467,16 @@ struct DefaultMma<ElementA, LayoutA, kAlignmentA, ElementB, LayoutB,
           ? cutlass::arch::CacheOperation::Global
           : cutlass::arch::CacheOperation::Always;
 
+  // Force SM80 DefaultMmaCore selection even for Stages=2.
+  // SM75/SM70 cores have Stages=2-specific specializations that shadow
+  // the SM80 generic-Stages one but lack kCacheOpA/kCacheOpB.
+  static int const kMmaCoreStages = (Stages >= 3) ? Stages : 3;
+
   // Define the MmaCore components
   using MmaCore = typename cutlass::gemm::threadblock::DefaultMmaCore<
       ThreadblockShape, WarpShape, InstructionShape, ElementA, LayoutA,
       ElementB, LayoutB, ElementAccumulator, LayoutC, arch::OpClassTensorOp,
-      Stages, Operator, false, CacheOpA, CacheOpB>;
+      kMmaCoreStages, Operator, false, CacheOpA, CacheOpB>;
 
   // Define iterators over tiles from the A operand
   using ThreadMapA = typename MmaCore::IteratorThreadMapA;

@@ -1,3 +1,13 @@
+## ncblas03-patch
+
+This branch contains a patch for the [ncblas03](https://github.com/codingjin/ncblas03) project that makes `stages=2` use `MmaMultistage` with `cp.async` instead of `MmaPipelined` on SM80+ GPUs. See [ncblas03/CUTLASS_STAGE_UPDATE.md](https://github.com/codingjin/ncblas03/blob/main/CUTLASS_STAGE_UPDATE.md) for details.
+
+```bash
+git clone -b ncblas03-patch git@github.com:codingjin/cutlass4.4.2.git ~/cutlass
+```
+
+---
+
 ![ALT](./media/images/gemm-hierarchy-with-epilogue-no-labels.png "Complete CUDA GEMM decomposition")
 # Overview
 

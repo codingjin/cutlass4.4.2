@@ -57,13 +57,19 @@ So `stages=2` genuinely runs with 2 SMEM buffers, 1 prologue load, and
 ### How to use
 
 ```bash
-# Clone the patched CUTLASS
 git clone -b ncblas03-patch git@github.com:codingjin/cutlass4.4.2.git ~/cutlass
+```
 
-# Build (SM80+ required)
+CUTLASS is header-only — no build needed. Just include the headers with
+`-I ~/cutlass/include` when compiling your CUDA code. The patch is in the
+headers and takes effect at compile time.
+
+To build the optional CUTLASS profiler (for ground-truth benchmarking):
+
+```bash
 mkdir -p ~/cutlass/build && cd ~/cutlass/build
 cmake .. -DCUTLASS_NVCC_ARCHS="80;86;89"
-make -j$(nproc)
+make cutlass_profiler -j$(nproc)
 ```
 
 ### Verify the patch

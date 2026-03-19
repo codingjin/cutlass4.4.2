@@ -1,10 +1,83 @@
-## ncblas03-patch
+## ncblas03-patch: Unified cp.async for All Stages on SM80+
 
-This branch contains a patch for the [ncblas03](https://github.com/codingjin/ncblas03) project that makes `stages=2` use `MmaMultistage` with `cp.async` instead of `MmaPipelined` on SM80+ GPUs. See [ncblas03/CUTLASS_STAGE_UPDATE.md](https://github.com/codingjin/ncblas03/blob/main/CUTLASS_STAGE_UPDATE.md) for details.
+This branch patches CUTLASS 4.4.2 for the [ncblas03](https://github.com/codingjin/ncblas03)
+analytical GEMM model project. The patch makes **all** pipeline stage counts
+(including `stages=2`) use the `MmaMultistage` mainloop with `cp.async` on
+SM80+ GPUs.
+
+### Why this patch exists
+
+In vanilla CUTLASS 2.x, `stages=2` triggers a dedicated template specialization
+that selects `MmaPipelined` — a different mainloop that uses `LDG` + `STS`
+(load through registers, then store to SMEM). All other stage counts
+(`stages≥3`) use `MmaMultistage` with `cp.async` (GMEM→SMEM direct, bypassing
+registers).
+
+This means `stages=2` and `stages=3` execute fundamentally different code paths.
+For the ncblas03 analytical model, we need a **single consistent mainloop** across
+all stage counts so the model only needs to predict one execution pattern.
+
+### What the patch does
+
+One file changed: `include/cutlass/gemm/threadblock/default_mma.h`
+
+**Change 1: Remove the Stages=2 TensorOp specialization.**
+
+The deleted specialization matched `(OpClassTensorOp, Stages=2)` and selected
+`MmaPipelined`. Without it, `stages=2` falls through to the generic TensorOp
+path that uses `MmaMultistage` with `cp.async`.
+
+**Change 2: `kMmaCoreStages = max(Stages, 3)` for DefaultMmaCore selection.**
+
+```cpp
+static int const kMmaCoreStages = (Stages >= 3) ? Stages : 3;
+```
+
+This is a **template selection trick**, not a runtime change. `DefaultMmaCore`
+is instantiated with `kMmaCoreStages=3` even when `Stages=2`. The reason:
+SM75/SM70 have their own `DefaultMmaCore` specializations for `Stages=2` that
+lack the `kCacheOpA`/`kCacheOpB` fields required by the SM80 cp.async path.
+Using `Stages=3` in the template argument bypasses those old specializations and
+selects the SM80 core with the correct fields.
+
+**This does NOT change the runtime stage count.** The actual `MmaMultistage`
+template receives the original `Stages` value:
+
+```cpp
+// kMmaCoreStages=3 → selects SM80 DefaultMmaCore (template selection only)
+using MmaCore = DefaultMmaCore<..., kMmaCoreStages, ...>;
+
+// Stages=2 → controls runtime behavior (SMEM buffers, prologue depth, etc.)
+using ThreadblockMma = MmaMultistage<..., Stages, ...>;
+```
+
+So `stages=2` genuinely runs with 2 SMEM buffers, 1 prologue load, and
+`cp_async_wait<0>` — exactly as described in kernel.md.
+
+### How to use
 
 ```bash
+# Clone the patched CUTLASS
 git clone -b ncblas03-patch git@github.com:codingjin/cutlass4.4.2.git ~/cutlass
+
+# Build (SM80+ required)
+mkdir -p ~/cutlass/build && cd ~/cutlass/build
+cmake .. -DCUTLASS_NVCC_ARCHS="80;86;89"
+make -j$(nproc)
 ```
+
+### Verify the patch
+
+```bash
+# Should show 2 lines: kMmaCoreStages definition and usage in DefaultMmaCore
+grep "kMmaCoreStages" ~/cutlass/include/cutlass/gemm/threadblock/default_mma.h
+
+# Should show the deleted specialization replaced by a comment
+grep -A2 "ncblas03.*REMOVED" ~/cutlass/include/cutlass/gemm/threadblock/default_mma.h
+```
+
+See [ncblas03/CUTLASS_STAGE_UPDATE.md](https://github.com/codingjin/ncblas03/blob/main/CUTLASS_STAGE_UPDATE.md)
+for the full design rationale.
 
 ---
 
